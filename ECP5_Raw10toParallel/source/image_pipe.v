@@ -63,8 +63,8 @@ wire [11:0] r_gamma, g_gamma, b_gamma;
 
 // Select the visible processing stage:
 // 0 = bypass, 1 = grayscale, 2 = threshold, 3 = Sobel edges
-// Use grayscale during FPGA bring-up to isolate timing outside the Sobel path.
-localparam [1:0] POST_PROCESS_MODE = 2'd1;
+// Use threshold mode during FPGA bring-up to isolate timing outside the Sobel path.
+localparam [1:0] POST_PROCESS_MODE = 2'd2;
 
 // Input Buffer and retiming
 // discard first frame
