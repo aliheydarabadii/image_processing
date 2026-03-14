@@ -20,7 +20,7 @@ module image_postprocess #(
     output reg [11:0] b_out
 );
 
-localparam [1:0] MODE_BYPASS   = 2'd0;
+localparam [1:0] MODE_BYPASS    = 2'd0;
 localparam [1:0] MODE_GRAYSCALE = 2'd1;
 localparam [1:0] MODE_THRESHOLD = 2'd2;
 localparam [1:0] MODE_SOBEL     = 2'd3;
@@ -36,6 +36,18 @@ reg        new_frame_pending;
 reg [11:0] top0, top1, top2;
 reg [11:0] mid0, mid1, mid2;
 reg [11:0] bot0, bot1, bot2;
+
+// Sobel pipeline stage 1: capture the 3x3 window and aligned controls.
+reg        de_s1, vsync_s1, hsync_s1, border_valid_s1;
+reg [11:0] r_s1, g_s1, b_s1, luma_s1;
+reg [11:0] top0_s1, top1_s1, top2_s1;
+reg [11:0] mid0_s1, mid1_s1, mid2_s1;
+reg [11:0] bot0_s1, bot1_s1, bot2_s1;
+
+// Sobel pipeline stage 2: compute and register gx/gy.
+reg        de_s2, vsync_s2, hsync_s2, border_valid_s2;
+reg [11:0] r_s2, g_s2, b_s2, luma_s2;
+reg signed [14:0] gx_s2, gy_s2;
 
 wire [13:0] luma_sum;
 wire [11:0] luma_in;
@@ -53,14 +65,11 @@ reg [11:0] prev1_pix, prev2_pix;
 wire [11:0] top0_next, top1_next, top2_next;
 wire [11:0] mid0_next, mid1_next, mid2_next;
 wire [11:0] bot0_next, bot1_next, bot2_next;
-
-wire [13:0] gx_pos, gx_neg, gy_pos, gy_neg;
-wire signed [14:0] gx_next, gy_next;
-wire [14:0] abs_gx, abs_gy, edge_sum;
-wire [11:0] edge_luma;
 wire        window_valid;
 
-reg [11:0] r_proc_next, g_proc_next, b_proc_next;
+wire [13:0] gx_pos_s1, gx_neg_s1, gy_pos_s1, gy_neg_s1;
+wire [14:0] abs_gx_s2, abs_gy_s2, edge_sum_s2;
+wire [11:0] edge_luma_s2;
 
 function [1:0] next_mod3;
     input [1:0] value;
@@ -156,56 +165,17 @@ assign bot0_next = bot1;
 assign bot1_next = bot2;
 assign bot2_next = luma_d1;
 
-assign gx_pos = {2'b00, top2_next} + {1'b0, mid2_next, 1'b0} + {2'b00, bot2_next};
-assign gx_neg = {2'b00, top0_next} + {1'b0, mid0_next, 1'b0} + {2'b00, bot0_next};
-assign gy_pos = {2'b00, bot0_next} + {1'b0, bot1_next, 1'b0} + {2'b00, bot2_next};
-assign gy_neg = {2'b00, top0_next} + {1'b0, top1_next, 1'b0} + {2'b00, top2_next};
-
-assign gx_next = $signed({1'b0, gx_pos}) - $signed({1'b0, gx_neg});
-assign gy_next = $signed({1'b0, gy_pos}) - $signed({1'b0, gy_neg});
-assign abs_gx = gx_next[14] ? (~gx_next + 15'd1) : gx_next;
-assign abs_gy = gy_next[14] ? (~gy_next + 15'd1) : gy_next;
-assign edge_sum = abs_gx + abs_gy;
-assign edge_luma = edge_sum[14:3];
 assign window_valid = de_d1 & (line_count >= 11'd2) & (x_count >= 11'd2);
 
-always @(*) begin
-    r_proc_next = 12'd0;
-    g_proc_next = 12'd0;
-    b_proc_next = 12'd0;
+assign gx_pos_s1 = {2'b00, top2_s1} + {1'b0, mid2_s1, 1'b0} + {2'b00, bot2_s1};
+assign gx_neg_s1 = {2'b00, top0_s1} + {1'b0, mid0_s1, 1'b0} + {2'b00, bot0_s1};
+assign gy_pos_s1 = {2'b00, bot0_s1} + {1'b0, bot1_s1, 1'b0} + {2'b00, bot2_s1};
+assign gy_neg_s1 = {2'b00, top0_s1} + {1'b0, top1_s1, 1'b0} + {2'b00, top2_s1};
 
-    if (de_d1) begin
-        case (MODE)
-            MODE_BYPASS: begin
-                r_proc_next = r_d1;
-                g_proc_next = g_d1;
-                b_proc_next = b_d1;
-            end
-
-            MODE_GRAYSCALE: begin
-                r_proc_next = luma_d1;
-                g_proc_next = luma_d1;
-                b_proc_next = luma_d1;
-            end
-
-            MODE_THRESHOLD: begin
-                if (luma_d1 >= THRESHOLD) begin
-                    r_proc_next = 12'hFFF;
-                    g_proc_next = 12'hFFF;
-                    b_proc_next = 12'hFFF;
-                end
-            end
-
-            default: begin
-                if (window_valid && (edge_luma >= EDGE_THRESHOLD)) begin
-                    r_proc_next = edge_luma;
-                    g_proc_next = edge_luma;
-                    b_proc_next = edge_luma;
-                end
-            end
-        endcase
-    end
-end
+assign abs_gx_s2 = gx_s2[14] ? (~gx_s2 + 15'd1) : gx_s2;
+assign abs_gy_s2 = gy_s2[14] ? (~gy_s2 + 15'd1) : gy_s2;
+assign edge_sum_s2 = abs_gx_s2 + abs_gy_s2;
+assign edge_luma_s2 = edge_sum_s2[14:3];
 
 always @(posedge clk or negedge rstn)
     if (!rstn) begin
@@ -286,6 +256,105 @@ always @(posedge clk or negedge rstn)
 
 always @(posedge clk or negedge rstn)
     if (!rstn) begin
+        de_s1 <= 1'b0;
+        vsync_s1 <= 1'b0;
+        hsync_s1 <= 1'b0;
+        border_valid_s1 <= 1'b0;
+        r_s1 <= 12'd0;
+        g_s1 <= 12'd0;
+        b_s1 <= 12'd0;
+        luma_s1 <= 12'd0;
+        top0_s1 <= 12'd0;
+        top1_s1 <= 12'd0;
+        top2_s1 <= 12'd0;
+        mid0_s1 <= 12'd0;
+        mid1_s1 <= 12'd0;
+        mid2_s1 <= 12'd0;
+        bot0_s1 <= 12'd0;
+        bot1_s1 <= 12'd0;
+        bot2_s1 <= 12'd0;
+    end
+    else begin
+        de_s1 <= de_d1;
+        vsync_s1 <= vsync_d1;
+        hsync_s1 <= hsync_d1;
+        border_valid_s1 <= window_valid;
+
+        if (de_d1) begin
+            r_s1 <= r_d1;
+            g_s1 <= g_d1;
+            b_s1 <= b_d1;
+            luma_s1 <= luma_d1;
+
+            // Sobel pipeline stage 1: register the 3x3 window taps.
+            top0_s1 <= top0_next;
+            top1_s1 <= top1_next;
+            top2_s1 <= top2_next;
+            mid0_s1 <= mid0_next;
+            mid1_s1 <= mid1_next;
+            mid2_s1 <= mid2_next;
+            bot0_s1 <= bot0_next;
+            bot1_s1 <= bot1_next;
+            bot2_s1 <= bot2_next;
+        end
+        else begin
+            r_s1 <= 12'd0;
+            g_s1 <= 12'd0;
+            b_s1 <= 12'd0;
+            luma_s1 <= 12'd0;
+            top0_s1 <= 12'd0;
+            top1_s1 <= 12'd0;
+            top2_s1 <= 12'd0;
+            mid0_s1 <= 12'd0;
+            mid1_s1 <= 12'd0;
+            mid2_s1 <= 12'd0;
+            bot0_s1 <= 12'd0;
+            bot1_s1 <= 12'd0;
+            bot2_s1 <= 12'd0;
+        end
+    end
+
+always @(posedge clk or negedge rstn)
+    if (!rstn) begin
+        de_s2 <= 1'b0;
+        vsync_s2 <= 1'b0;
+        hsync_s2 <= 1'b0;
+        border_valid_s2 <= 1'b0;
+        r_s2 <= 12'd0;
+        g_s2 <= 12'd0;
+        b_s2 <= 12'd0;
+        luma_s2 <= 12'd0;
+        gx_s2 <= 15'sd0;
+        gy_s2 <= 15'sd0;
+    end
+    else begin
+        de_s2 <= de_s1;
+        vsync_s2 <= vsync_s1;
+        hsync_s2 <= hsync_s1;
+        border_valid_s2 <= border_valid_s1;
+
+        if (de_s1) begin
+            r_s2 <= r_s1;
+            g_s2 <= g_s1;
+            b_s2 <= b_s1;
+            luma_s2 <= luma_s1;
+
+            // Sobel pipeline stage 2: compute and register gx/gy.
+            gx_s2 <= $signed({1'b0, gx_pos_s1}) - $signed({1'b0, gx_neg_s1});
+            gy_s2 <= $signed({1'b0, gy_pos_s1}) - $signed({1'b0, gy_neg_s1});
+        end
+        else begin
+            r_s2 <= 12'd0;
+            g_s2 <= 12'd0;
+            b_s2 <= 12'd0;
+            luma_s2 <= 12'd0;
+            gx_s2 <= 15'sd0;
+            gy_s2 <= 15'sd0;
+        end
+    end
+
+always @(posedge clk or negedge rstn)
+    if (!rstn) begin
         vsync_out <= 1'b0;
         hsync_out <= 1'b0;
         de_out <= 1'b0;
@@ -294,12 +363,51 @@ always @(posedge clk or negedge rstn)
         b_out <= 12'd0;
     end
     else begin
-        vsync_out <= vsync_d1;
-        hsync_out <= hsync_d1;
-        de_out <= de_d1;
-        r_out <= r_proc_next;
-        g_out <= g_proc_next;
-        b_out <= b_proc_next;
+        // Sobel pipeline stage 3: magnitude/threshold and final output register.
+        vsync_out <= vsync_s2;
+        hsync_out <= hsync_s2;
+        de_out <= de_s2;
+        r_out <= 12'd0;
+        g_out <= 12'd0;
+        b_out <= 12'd0;
+
+        if (de_s2) begin
+            case (MODE)
+                MODE_BYPASS: begin
+                    r_out <= r_s2;
+                    g_out <= g_s2;
+                    b_out <= b_s2;
+                end
+
+                MODE_GRAYSCALE: begin
+                    r_out <= luma_s2;
+                    g_out <= luma_s2;
+                    b_out <= luma_s2;
+                end
+
+                MODE_THRESHOLD: begin
+                    if (luma_s2 >= THRESHOLD) begin
+                        r_out <= 12'hFFF;
+                        g_out <= 12'hFFF;
+                        b_out <= 12'hFFF;
+                    end
+                end
+
+                MODE_SOBEL: begin
+                    if (border_valid_s2 && (edge_luma_s2 >= EDGE_THRESHOLD)) begin
+                        r_out <= edge_luma_s2;
+                        g_out <= edge_luma_s2;
+                        b_out <= edge_luma_s2;
+                    end
+                end
+
+                default: begin
+                    r_out <= 12'd0;
+                    g_out <= 12'd0;
+                    b_out <= 12'd0;
+                end
+            endcase
+        end
     end
 
 endmodule
