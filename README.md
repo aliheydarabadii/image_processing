@@ -13,10 +13,6 @@ The starting point is the vendor dual-camera demo:
 
 The goal of this project is to design and implement an FPGA-based image-processing application on the ECP5, starting from the provided dual-camera-to-HDMI demo design.
 
-Student contact:
-
-- Serena Curzel, `serena.curzel@polimi.it`
-
 ## Repository structure
 
 - `Crosslink_DualCSI2toRaw10/`: MIPI CSI-2 reception, RAW10 unpacking, and dual-camera merge
